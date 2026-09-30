@@ -27,7 +27,7 @@ def load_model(config_name, checkpoint_path, device="cuda"):
 
     model = instantiate(cfg)
     state_dict = torch.load(
-        checkpoint_path, map_location=device, mmap=True, weights_only=True
+        checkpoint_path, map_location="cpu", mmap=True, weights_only=True
     )
     if "state_dict" in state_dict:
         state_dict = state_dict["state_dict"]
@@ -41,7 +41,9 @@ def load_model(config_name, checkpoint_path, device="cuda"):
 
     result = model.load_state_dict(state_dict, strict=False, assign=True)
     model.eval()
-    model.to(device)
+    # bf16 halves VRAM (fp32 codec is ~2.8 GB); the inference engine already
+    # decodes under bf16 autocast, so this matches the compute dtype
+    model.to(device=device, dtype=torch.bfloat16)
 
     logger.info(f"Loaded model: {result}")
     return model

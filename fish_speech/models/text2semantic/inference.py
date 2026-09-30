@@ -51,6 +51,10 @@ RAS_WIN_SIZE = 10  # window for Repetition Aware Sampling
 RAS_HIGH_TEMP = 1.0
 RAS_HIGH_TOP_P = 0.9
 
+# KV cache length cap: config.max_seq_len (32768) needs ~4.8 GB of KV cache,
+# which cannot fit on a 4 GB GPU; TTS requests never exceed a few k tokens
+KV_CACHE_MAX_SEQ_LEN = 4096
+
 
 def logits_to_probs(
     logits,
@@ -302,7 +306,7 @@ def generate(
         with torch.device(device):
             model.setup_caches(
                 max_batch_size=1,  # Fixed to 1, avoid dynamic changes
-                max_seq_len=model.config.max_seq_len,
+                max_seq_len=min(model.config.max_seq_len, KV_CACHE_MAX_SEQ_LEN),
                 dtype=next(model.parameters()).dtype,
             )
         model._cache_setup_done = True
@@ -783,7 +787,7 @@ def launch_thread_safe_queue(
         with torch.device(device):
             model.setup_caches(
                 max_batch_size=1,
-                max_seq_len=model.config.max_seq_len,
+                max_seq_len=min(model.config.max_seq_len, KV_CACHE_MAX_SEQ_LEN),
                 dtype=next(model.parameters()).dtype,
             )
         init_event.set()
@@ -902,7 +906,7 @@ def main(
     with torch.device(device):
         model.setup_caches(
             max_batch_size=1,
-            max_seq_len=model.config.max_seq_len,
+            max_seq_len=min(model.config.max_seq_len, KV_CACHE_MAX_SEQ_LEN),
             dtype=next(model.parameters()).dtype,
         )
     if torch.cuda.is_available():

@@ -538,14 +538,19 @@ class BaseTransformer(nn.Module):
                 raise ValueError(f"Unknown model type: {config.model_type}")
 
         logger.info(f"Loading model from {path}, config: {config}")
-        # Initialize model without passing tokenizer explicitly to __init__
-        model = model_cls(config)
+        if load_weights:
+            # Meta-init: the fp32 random init would commit ~17 GB of RAM that
+            # load_state_dict(assign=True) below immediately discards
+            with torch.device("meta"):
+                model = model_cls(config)
+        else:
+            # Initialize model without passing tokenizer explicitly to __init__
+            model = model_cls(config)
+            logger.info("Randomly initialized model")
         # Attach tokenizer to model instance for inference convenience (optional, but good for user scripts)
         model.tokenizer = tokenizer
 
-        if load_weights is False:
-            logger.info("Randomly initialized model")
-        else:
+        if load_weights:
             if "int8" in str(Path(path)):
                 logger.info("Using int8 weight-only quantization!")
                 from tools.llama.quantize import WeightOnlyInt8QuantHandler
@@ -606,6 +611,21 @@ class BaseTransformer(nn.Module):
 
             err = model.load_state_dict(weights, strict=False, assign=True)
             logger.info(f"Model weights loaded - Status: {err}")
+
+            # Non-persistent buffers were created on meta; materialize them.
+            # Capped to the KV cache limit (4096) so the 32768x32768 causal
+            # mask (~1 GB) is not moved to a 4 GB GPU
+            buf_seq_len = min(config.max_seq_len, 4096)
+            model.freqs_cis = precompute_freqs_cis(
+                buf_seq_len, config.head_dim, config.rope_base
+            )
+            model.causal_mask = torch.tril(
+                torch.ones(buf_seq_len, buf_seq_len, dtype=torch.bool)
+            )
+            if hasattr(model, "fast_freqs_cis"):
+                model.fast_freqs_cis = precompute_freqs_cis(
+                    config.num_codebooks, config.fast_head_dim, config.rope_base
+                )
 
         if lora_config is not None:
             setup_lora(model, lora_config)
